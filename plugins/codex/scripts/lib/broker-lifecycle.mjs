@@ -226,12 +226,14 @@ export function teardownBrokerSession({ endpoint = null, pidFile, logFile, sessi
     }
   }
 
-  if (pidFile && fs.existsSync(pidFile)) {
-    fs.unlinkSync(pidFile);
-  }
-
-  if (logFile && fs.existsSync(logFile)) {
-    fs.unlinkSync(logFile);
+  // The exiting broker removes its own pid file, so it can vanish between the
+  // check and the unlink; that race must not fail teardown.
+  for (const file of [pidFile, logFile]) {
+    try {
+      if (file) fs.unlinkSync(file);
+    } catch (error) {
+      if (error?.code !== "ENOENT" && error?.code !== "EPERM" && error?.code !== "EBUSY") throw error;
+    }
   }
 
   if (endpoint) {

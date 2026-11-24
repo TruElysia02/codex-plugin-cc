@@ -72,6 +72,10 @@ const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json");
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
+// Keep each await call well under Claude Code's default 120s Bash timeout and its
+// ~180s auto-backgrounding, so the rescue subagent never loses the result.
+const DEFAULT_AWAIT_TIMEOUT_MS = 100000;
+const AWAIT_RUNNING_MARKER = "CODEX_JOB_RUNNING";
 const CANCEL_TURN_INTERRUPT_TIMEOUT_MS = 5000;
 const CANCEL_TURN_IDENTITY_WAIT_MS = 3000;
 const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
@@ -89,6 +93,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
+      "  node scripts/codex-companion.mjs await <job-id> [--timeout-ms <ms>]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]"
     ].join("\n")
   );
@@ -964,6 +969,36 @@ function handleResult(argv) {
   outputCommandResult(payload, renderStoredJobResult(job, storedJob), options.json);
 }
 
+async function handleAwait(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd", "timeout-ms", "poll-interval-ms"],
+    booleanOptions: ["json"]
+  });
+
+  const reference = positionals[0] ?? "";
+  if (!reference) {
+    throw new Error("`await` requires a job id.");
+  }
+
+  const cwd = resolveCommandCwd(options);
+  const snapshot = await waitForSingleJobSnapshot(cwd, reference, {
+    timeoutMs: options["timeout-ms"] ?? DEFAULT_AWAIT_TIMEOUT_MS,
+    pollIntervalMs: options["poll-interval-ms"]
+  });
+
+  if (snapshot.waitTimedOut) {
+    const payload = { running: true, job: snapshot.job };
+    outputCommandResult(
+      payload,
+      `${AWAIT_RUNNING_MARKER} ${snapshot.job.id} (${snapshot.job.status}). Run await again to keep waiting.\n`,
+      options.json
+    );
+    return;
+  }
+
+  handleResult([snapshot.job.id, ...(options.cwd ? ["--cwd", options.cwd] : []), ...(options.json ? ["--json"] : [])]);
+}
+
 function handleTaskResumeCandidate(argv) {
   const { options } = parseCommandInput(argv, {
     valueOptions: ["cwd"],
@@ -1227,6 +1262,9 @@ async function main() {
       break;
     case "result":
       handleResult(argv);
+      break;
+    case "await":
+      await handleAwait(argv);
       break;
     case "task-resume-candidate":
       handleTaskResumeCandidate(argv);

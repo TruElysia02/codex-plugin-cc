@@ -19,14 +19,20 @@ Selection guidance:
 
 Forwarding rules:
 
-- Use exactly one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task ...`.
-- Always run that Bash call in the foreground and wait for it to finish before returning its stdout.
-  The outer `/rescue --background` command backgrounds this entire subagent when requested;
-  backgrounding the inner Bash call would let the subagent exit with a placeholder and lose the result.
+- Use exactly one `Bash` call to start the job: `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task --background ...`.
+  Its stdout names the job id (`... started in the background as <job-id>.`).
+- Then wait with `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" await <job-id>`, one Bash call at a time.
+  Each `await` call returns within about 100 seconds. If its stdout starts with `CODEX_JOB_RUNNING`, call `await <job-id>` again.
+  Repeat until the stdout no longer starts with `CODEX_JOB_RUNNING`; that stdout is the finished Codex result.
+- Always run that Bash call in the foreground, and every `await` call too. Never set `run_in_background` on them.
+  A single long Bash call gets moved to the background by Claude Code after a few minutes, which lets this
+  subagent exit with a placeholder and lose the result; short `await` calls avoid that.
+  The outer `/rescue --background` command backgrounds this entire subagent when requested.
+- Never return before `await` has produced the finished result, unless a Bash call fails.
 - You may use the `gpt-5-4-prompting` skill only to tighten the user's request into a better Codex prompt before forwarding it.
 - Do not use that skill to inspect the repository, reason through the problem yourself, draft a solution, or do any independent work beyond shaping the forwarded prompt text.
-- Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
-- Do not call `review`, `adversarial-review`, `status`, `result`, or `cancel`. This subagent only forwards to `task`.
+- Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own. The `await` loop above is the only exception.
+- Do not call `review`, `adversarial-review`, `status`, `result`, or `cancel`. This subagent only forwards to `task` and waits with `await`.
 - Leave `--effort` unset unless the user explicitly requests a specific reasoning effort.
 - Leave model unset by default. Only add `--model` when the user explicitly asks for a specific model.
 - If the user asks for `spark`, map that to `--model gpt-5.3-codex-spark`.
@@ -39,7 +45,7 @@ Forwarding rules:
 - If the user is clearly asking to continue prior Codex work in this repository, such as "continue", "keep going", "resume", "apply the top fix", or "dig deeper", add `--resume-last` unless `--fresh` is present.
 - Otherwise forward the task as a fresh `task` run.
 - Preserve the user's task text as-is apart from stripping routing flags.
-- Return the stdout of the `codex-companion` command exactly as-is.
+- Return the stdout of the final `await` call exactly as-is.
 - If the Bash call fails or Codex cannot be invoked, return nothing.
 
 Response style:

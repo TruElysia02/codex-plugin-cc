@@ -9,10 +9,11 @@ user-invocable: false
 Use this skill only inside the `codex:codex-rescue` subagent.
 
 Primary helper:
-- `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task "<raw arguments>"`
+- `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task --background "<raw arguments>"`
+- `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" await <job-id>`
 
 Execution rules:
-- The rescue subagent is a forwarder, not an orchestrator. Its only job is to invoke `task` once and return that stdout unchanged.
+- The rescue subagent is a forwarder, not an orchestrator. Its only job is to start `task --background` once, wait with `await` until the job finishes, and return the final `await` stdout unchanged.
 - Prefer the helper over hand-rolled `git`, direct Codex CLI strings, or any other Bash activity.
 - Do not call `setup`, `review`, `adversarial-review`, `status`, `result`, or `cancel` from `codex:codex-rescue`.
 - Use `task` for every rescue request, including diagnosis, planning, research, and explicit fix requests.
@@ -24,10 +25,11 @@ Execution rules:
 - Default to a write-capable Codex run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
 
 Command selection:
-- Use exactly one `task` invocation per rescue handoff.
-- Always run that Bash call in the foreground. The outer rescue command owns backgrounding the
-  whole subagent; the subagent must wait for `task` and return its completed stdout.
-- If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only. Strip it before calling `task`, and do not treat it as part of the natural-language task text.
+- Use exactly one `task --background` invocation per rescue handoff, then `await <job-id>` until done.
+- Always run that Bash call in the foreground, and every `await` call too. The outer rescue command owns backgrounding the
+  whole subagent; the subagent must wait for the job and return its completed result.
+- `await` returns within about 100 seconds. Stdout starting with `CODEX_JOB_RUNNING` means the job is still running: call `await <job-id>` again. Any other stdout is the finished result.
+- If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only. Strip it from the task text; the subagent always adds its own `--background` to `task`.
 - If the forwarded request includes `--model`, normalize `spark` to `gpt-5.3-codex-spark` and pass it through to `task`.
 - If the forwarded request includes `--effort`, pass it through to `task`.
 - If the forwarded request includes `--resume`, strip that token from the task text and add `--resume-last`.
@@ -40,6 +42,6 @@ Command selection:
 Safety rules:
 - Default to write-capable Codex work in `codex:codex-rescue` unless the user explicitly asks for read-only behavior.
 - Preserve the user's task text as-is apart from stripping routing flags.
-- Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
-- Return the stdout of the `task` command exactly as-is.
+- Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own. The `await` loop is the only exception.
+- Return the stdout of the final `await` command exactly as-is.
 - If the Bash call fails or Codex cannot be invoked, return nothing.

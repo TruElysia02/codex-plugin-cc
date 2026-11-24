@@ -4624,3 +4624,66 @@ test("setup and status honor --cwd when reading shared session runtime", () => {
   assert.equal(payload.sessionRuntime.mode, "shared");
   assert.equal(payload.sessionRuntime.endpoint, "unix:/tmp/fake-broker.sock");
 });
+
+test("await prints the running marker when the job is still active", () => {
+  const workspace = makeTempDir();
+  const stateDir = resolveStateDir(workspace);
+  const jobsDir = path.join(stateDir, "jobs");
+  fs.mkdirSync(jobsDir, { recursive: true });
+  const logFile = path.join(jobsDir, "task-live.log");
+  fs.writeFileSync(logFile, "[2026-03-18T15:30:00.000Z] Starting Codex Task.\n", "utf8");
+  const job = {
+    id: "task-live",
+    status: "running",
+    title: "Codex Task",
+    jobClass: "task",
+    logFile,
+    createdAt: "2026-03-18T15:30:00.000Z",
+    updatedAt: "2026-03-18T15:30:02.000Z"
+  };
+  fs.writeFileSync(path.join(jobsDir, "task-live.json"), JSON.stringify(job), "utf8");
+  fs.writeFileSync(
+    path.join(stateDir, "state.json"),
+    `${JSON.stringify({ version: 1, config: { stopReviewGate: false }, jobs: [job] })}\n`,
+    "utf8"
+  );
+
+  const result = run("node", [SCRIPT, "await", "task-live", "--timeout-ms", "25"], { cwd: workspace });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^CODEX_JOB_RUNNING task-live \(running\)/);
+});
+
+test("await returns the finished result of a background task", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "slow-task");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const launched = run("node", [SCRIPT, "task", "--background", "investigate the failing test"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(launched.status, 0, launched.stderr);
+  const jobId = launched.stdout.match(/started in the background as (\S+?)\./)?.[1];
+  assert.ok(jobId, launched.stdout);
+
+  let output = "";
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const awaited = run("node", [SCRIPT, "await", jobId, "--timeout-ms", "15000"], {
+      cwd: repo,
+      env: buildEnv(binDir)
+    });
+    assert.equal(awaited.status, 0, awaited.stderr);
+    output = awaited.stdout;
+    if (!output.startsWith("CODEX_JOB_RUNNING")) {
+      break;
+    }
+  }
+
+  assert.doesNotMatch(output, /^CODEX_JOB_RUNNING/);
+  assert.match(output, /Handled the requested task/);
+});
