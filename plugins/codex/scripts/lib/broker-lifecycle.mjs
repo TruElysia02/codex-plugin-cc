@@ -40,8 +40,8 @@ export async function waitForBrokerEndpoint(endpoint, timeoutMs = 2000) {
   return false;
 }
 
-export async function sendBrokerShutdown(endpoint) {
-  const first = await sendBrokerShutdownOnce(endpoint);
+export async function sendBrokerShutdown(endpoint, timeoutMs = 2000) {
+  const first = await sendBrokerShutdownOnce(endpoint, timeoutMs);
   if (!first.refused) {
     return first;
   }
@@ -50,19 +50,27 @@ export async function sendBrokerShutdown(endpoint) {
   // If the peer's shutdown won, the retry reports unreachable and teardown
   // proceeds; a genuinely busy broker refuses again.
   await new Promise((resolve) => setTimeout(resolve, 150 + Math.floor(Math.random() * 150)));
-  return await sendBrokerShutdownOnce(endpoint);
+  return await sendBrokerShutdownOnce(endpoint, timeoutMs);
 }
 
-async function sendBrokerShutdownOnce(endpoint) {
+async function sendBrokerShutdownOnce(endpoint, timeoutMs) {
   return await new Promise((resolve) => {
     const socket = connectToEndpoint(endpoint);
     socket.setEncoding("utf8");
     let buffer = "";
     let settled = false;
     let connected = false;
+    // Bound the exchange so a wedged broker cannot hang SessionEnd (Windows
+    // named pipes may never emit error/close). A timeout is ambiguous, like a
+    // connection lost mid-exchange.
+    const timer = setTimeout(() => {
+      socket.destroy();
+      finish({ delivered: false, refused: false, unreachable: !connected });
+    }, timeoutMs);
     const finish = (outcome) => {
       if (!settled) {
         settled = true;
+        clearTimeout(timer);
         resolve(outcome);
       }
     };
